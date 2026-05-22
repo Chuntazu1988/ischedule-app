@@ -362,7 +362,13 @@ def load_daily_schedule(uploaded_file):
 
 def normalize_employees(df):
     df = df.copy()
-    df.columns = df.columns.astype(str).str.strip()
+    df.columns = (
+    df.columns.astype(str)
+    .str.replace("\ufeff", "", regex=False)
+    .str.replace("\u200f", "", regex=False)
+    .str.replace("\u200e", "", regex=False)
+    .str.strip()
+)
 
     if "שם" not in df.columns:
         raise ValueError("בקובץ העובדים חייבת להיות עמודה בשם: שם")

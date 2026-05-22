@@ -353,7 +353,7 @@ def night_break_window_passed(assignments, emp_name):
 
 
 def sort_candidates(candidates, assignments, role, task_start=None, task_end=None):
-    from helpers import area_switch_penalty, classify_shift
+    from utils.helpers import area_switch_penalty, classify_shift
 
     candidates = candidates.copy()
     if candidates.empty:

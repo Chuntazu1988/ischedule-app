@@ -30,12 +30,15 @@ from app.scheduler import (
 from utils.constants import ROLE_ORDER
 
 from app.display import (
-    build_next_task_labels, build_output_table, build_workload,
-    build_counter_continuity_rows, build_available_in_hall, build_unassigned_agents,
-    render_flight_card, render_flight_card_with_swap,
+    build_next_task_labels,
+    build_output_table,
+    build_counter_continuity_rows,
+    build_available_in_hall,
+    render_flight_card,
+    render_flight_card_with_swap,
     to_excel_bytes,
+    to_departures_report_excel_bytes,
 )
-
 # =========================
 # PAGE CONFIG
 # =========================

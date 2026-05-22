@@ -683,3 +683,121 @@ def to_excel_bytes(output_df, workload_df, schedule_df, continuity_df=None):
         output_df.to_csv(output, index=False, encoding="utf-8-sig")
     output.seek(0)
     return output
+def to_departures_report_excel_bytes(flights_df, schedule_df, employees_df):
+    output = io.BytesIO()
+
+    rows = []
+
+    flights = flights_df.copy()
+    flights["_flight_key"] = flights["טיסה"].apply(flight_key)
+    flights = flights.drop_duplicates(subset=["_flight_key"], keep="first")
+
+    for _, flight in flights.iterrows():
+        fnum = str(flight.get("טיסה", "")).strip()
+
+        tasks = schedule_df[
+            schedule_df["טיסה"].astype(str).str.strip() == fnum
+        ].copy()
+
+        agents = []
+        managers = []
+
+        for _, task in tasks.iterrows():
+            worker = str(task.get("עובד", "")).strip()
+            role = str(task.get("תפקיד", "")).strip()
+            base_role = str(task.get("תפקיד בסיס", role)).strip()
+
+            if not worker or "❌" in worker:
+                continue
+
+            shift = employee_shift_text(employees_df, worker)
+            text = f"{worker} - {role}"
+
+            item = {
+                "worker": text,
+                "shift": shift,
+            }
+
+            if (
+                "ראש צוות" in role
+                or "רצ" in role
+                or "ר״צ" in role
+                or "טרייני" in role
+                or "מתאם" in role
+                or "מפקח" in role
+            ):
+                managers.append(item)
+            else:
+                agents.append(item)
+
+        max_rows = max(len(agents), len(managers), 1)
+
+        for i in range(max_rows):
+            rows.append({
+                "סבב": str(flight.get("סבב", "")).strip(),
+                "משמרת": agents[i]["shift"] if i < len(agents) else "",
+                "דיילים": agents[i]["worker"] if i < len(agents) else "",
+                "משמרת ": managers[i]["shift"] if i < len(managers) else "",
+                'ר"צ': managers[i]["worker"] if i < len(managers) else "",
+                "מטוס": str(flight.get("סוג מטוס", "")).strip() or str(flight.get("רישוי", "")).strip(),
+                "יעד": str(flight.get("יעד", "")).strip(),
+                "שעה": (
+                    f'{str(flight.get("המראה", "")).strip()} '
+                    f'({str(flight.get("בורדינג", "")).strip()})'
+                ).strip(),
+                "טיסה": fnum,
+            })
+
+        rows.append({
+            "סבב": "",
+            "משמרת": "",
+            "דיילים": "",
+            "משמרת ": "",
+            'ר"צ': "",
+            "מטוס": "",
+            "יעד": "",
+            "שעה": "",
+            "טיסה": "",
+        })
+
+    report_df = pd.DataFrame(rows, columns=[
+        "סבב", "משמרת", "דיילים", "משמרת ", 'ר"צ',
+        "מטוס", "יעד", "שעה", "טיסה"
+    ])
+
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        report_df.to_excel(
+            writer,
+            index=False,
+            sheet_name="דוח שיבוץ טיסות - המראות",
+            startrow=3
+        )
+
+        ws = writer.book["דוח שיבוץ טיסות - המראות"]
+
+        ws.sheet_view.rightToLeft = True
+
+        ws["E1"] = "שיבוץ טיסות"
+        ws["E2"] = str(flights_df.get("תאריך", pd.Series([""])).iloc[0]) if "תאריך" in flights_df.columns else ""
+
+        for col in range(1, 10):
+            ws.cell(row=4, column=col).font = ws.cell(row=4, column=col).font.copy(bold=True)
+            ws.cell(row=4, column=col).alignment = ws.cell(row=4, column=col).alignment.copy(horizontal="center")
+
+        widths = {
+            "A": 18,
+            "B": 16,
+            "C": 32,
+            "D": 16,
+            "E": 34,
+            "F": 14,
+            "G": 12,
+            "H": 16,
+            "I": 14,
+        }
+
+        for col, width in widths.items():
+            ws.column_dimensions[col].width = width
+
+    output.seek(0)
+    return output

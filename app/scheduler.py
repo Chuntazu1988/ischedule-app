@@ -627,91 +627,139 @@ def build_schedule(flights_df, employees_df):
                 assignments.append(task)
                 assignments_for_flight.append(task)
                 used_on_flight.add(name_key(selected))
-
+ 
     return pd.DataFrame(assignments)
 
 
 def upgrade_teamleads(assignments_df, employees_df):
     """
-    Second pass: for each missing ראש צוות slot, check if a qualified TL
-    is assigned as דייל on a concurrent flight. If so, promote them.
+    השלמת ראשי צוות חסרים:
+    1. קודם מחפשת ראש צוות פנוי מכל העובדים.
+    2. אם אין, מקדמת דייל שכבר שובץ וחוסכת כפילויות.
+    3. לא משתמשת בלולאה, כדי שלא תיתקע.
     """
     assignments = assignments_df.to_dict("records")
 
-    def tasks_overlap(t1, t2):
-        try:
-            s1 = time_to_minutes(t1["התחלה"]); e1 = time_to_minutes(t1["סיום"])
-            s2 = time_to_minutes(t2["התחלה"]); e2 = time_to_minutes(t2["סיום"])
-            if e1 < s1: e1 += 1440
-            if e2 < s2: e2 += 1440
-            if s2 < s1 - 720: s2 += 1440; e2 += 1440
-            if s1 < s2 - 720: s1 += 1440; e1 += 1440
-            return not (e1 <= s2 + 5 or e2 <= s1 + 5)
-        except Exception:
-            return False
+    def clean_name(x):
+        return str(x).strip()
 
-    changed = True
-    max_iter = 20
-    while changed and max_iter > 0:
-        changed = False
-        max_iter -= 1
+    def is_missing_worker(x):
+        return "❌" in str(x)
 
-        missing_tl = [t for t in assignments if "❌" in str(t.get("עובד","")) and t.get("תפקיד בסיס") == "ראש צוות"]
-        if not missing_tl:
-            break
+    def get_emp_row(name):
+        rows = employees_df[employees_df["שם"].astype(str).str.strip() == clean_name(name)]
+        return None if rows.empty else rows.iloc[0]
 
-        for missing in missing_tl:
-            tl_as_agent = [
-                t for t in assignments
-                if t.get("תפקיד בסיס") == "דייל"
-                and "❌" not in str(t.get("עובד",""))
-                and tasks_overlap(t, missing)
-            ]
-            promoted = None
-            promoted_task = None
-            for t in tl_as_agent:
-                worker_name = t["עובד"]
-                emp_row = employees_df[employees_df["שם"] == worker_name]
-                if emp_row.empty:
-                    continue
-                if str(emp_row.iloc[0].get("ראש צוות","")).strip() == "כן":
-                    promoted = worker_name
-                    promoted_task = t
-                    break
+    def task_times(task):
+        return to_datetime_time(task["התחלה"]), to_datetime_time(task["סיום"])
 
-            if not promoted:
+    missing_tl_tasks = [
+        task for task in assignments
+        if task.get("תפקיד בסיס") == "ראש צוות"
+        and is_missing_worker(task.get("עובד", ""))
+    ]
+
+    for missing in missing_tl_tasks:
+        start, end = task_times(missing)
+
+        # שלב 1: חיפוש ראש צוות פנוי מכל העובדים
+        tl_candidates = employees_df[
+            employees_df["ראש צוות"].astype(str).str.strip() == "כן"
+        ].copy()
+
+        tl_candidates = sort_candidates(
+            tl_candidates,
+            assignments,
+            "ראש צוות",
+            start,
+            end,
+        )
+
+        found_tl = None
+
+        for _, emp in tl_candidates.iterrows():
+            name = clean_name(emp["שם"])
+
+            if (
+                is_within_shift(emp, start, end)
+                and is_available(assignments, name, start, end, emp)
+                and has_room_for_break(assignments, emp, name, start, end)
+            ):
+                found_tl = name
+                break
+
+        if found_tl:
+            missing["עובד"] = found_tl
+            continue
+
+        # שלב 2: אם אין ראש צוות פנוי, נסה לקדם דייל מוסמך שכבר עובד בזמן הזה
+        promoted_task = None
+        promoted_name = None
+
+        for task in assignments:
+            if task.get("תפקיד בסיס") != "דייל":
                 continue
 
-            used_names = set(t["עובד"] for t in assignments if "❌" not in str(t.get("עובד","")))
-            used_names.discard(promoted)
+            worker = clean_name(task.get("עובד", ""))
 
-            agent_start = to_datetime_time(promoted_task["התחלה"])
-            agent_end   = to_datetime_time(promoted_task["סיום"])
+            if not worker or is_missing_worker(worker):
+                continue
 
-            agent_candidates = employees_df[
-                (employees_df["דייל"].astype(str).str.strip() == "כן") &
-                (~employees_df["שם"].isin(used_names))
-            ].copy()
-            agent_candidates = sort_candidates(agent_candidates, assignments, "דייל", agent_start, agent_end)
+            emp = get_emp_row(worker)
+            if emp is None:
+                continue
 
-            replacement = None
-            for _, emp in agent_candidates.iterrows():
-                name = emp["שם"]
-                if (
-                    is_within_shift(emp, agent_start, agent_end)
-                    and is_available(assignments, name, agent_start, agent_end, emp)
-                    and has_room_for_break(assignments, emp, name, agent_start, agent_end)
-                ):
-                    replacement = name
-                    break
+            if str(emp.get("ראש צוות", "")).strip() != "כן":
+                continue
 
-            missing["עובד"] = promoted
-            promoted_task["עובד"] = replacement if replacement else "❌ חסר דייל"
-            changed = True
+            t_start, t_end = task_times(task)
+
+            # חייב להיות חפיפה עם החוסר
+            if not (t_start < end and start < t_end):
+                continue
+
+            promoted_task = task
+            promoted_name = worker
             break
 
-    return pd.DataFrame(assignments)
+        if not promoted_task or not promoted_name:
+            continue
 
+        # מחפשים דייל מחליף למשבצת שהתפנתה
+        agent_start, agent_end = task_times(promoted_task)
+
+        agent_candidates = employees_df[
+            employees_df["דייל"].astype(str).str.strip() == "כן"
+        ].copy()
+
+        agent_candidates = sort_candidates(
+            agent_candidates,
+            assignments,
+            "דייל",
+            agent_start,
+            agent_end,
+        )
+
+        replacement = None
+
+        for _, emp in agent_candidates.iterrows():
+            name = clean_name(emp["שם"])
+
+            if name == promoted_name:
+                continue
+
+            if (
+                is_within_shift(emp, agent_start, agent_end)
+                and is_available(assignments, name, agent_start, agent_end, emp)
+                and has_room_for_break(assignments, emp, name, agent_start, agent_end)
+            ):
+                replacement = name
+                break
+
+        missing["עובד"] = promoted_name
+        promoted_task["עובד"] = replacement if replacement else "❌ חסר דייל"
+
+    return pd.DataFrame(assignments)
 
 # =========================
 # SWAP HELPERS

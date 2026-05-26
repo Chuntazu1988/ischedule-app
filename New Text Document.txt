@@ -1,0 +1,14 @@
+זה בגלל שלא נתת לו פורט נפרד, אז הוא נפתח על ברירת המחדל/האתר שכבר רץ.
+
+בטרמינל של הגאנט תריצי ככה:
+
+python -m streamlit run streamlit_app_gantt.py --server.port 8502
+
+ואת האתר הראשי תשאירי בטרמינל השני על:
+
+python -m streamlit run streamlit_app.py --server.port 8501
+
+ואז:
+
+ראשי: localhost:8501
+גאנט: localhost:8502

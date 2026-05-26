@@ -1,12 +1,135 @@
 import re
 import pandas as pd
+def normalize_yes_no(value):
+    if value is None:
+        return "לא"
 
-from utils.constants import ROLE_COLUMNS
-from utils.helpers import (
-    clean_text, normalize_yes_no, normalize_time_text, clean_roster_name,
-    extract_shift_range_from_text, is_time_text, parse_times, safe_sort_by_time,
-    find_column, flight_key, name_key, name_key_reversed,
-)
+    text = str(value).strip().lower()
+
+    yes_values = [
+        "כן",
+        "yes",
+        "true",
+        "1",
+        "y",
+        "x",
+    ]
+
+    return "כן" if text in yes_values else "לא"
+try:
+    from constants import ROLE_COLUMNS
+except ModuleNotFoundError:
+    ROLE_COLUMNS = [
+    "אחמ״ש",
+    "אחמש",
+    "דלפק",
+    "שער",
+    "בידוק",
+    "תורן",
+    "מפעיל",
+    "משמרת",
+    "תפקיד",
+]
+def flight_key(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip().upper()
+
+    text = text.replace(" ", "")
+    text = text.replace("-", "")
+
+    return text
+def name_key(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip().lower()
+
+    text = text.replace(" ", "")
+    text = text.replace("-", "")
+    text = text.replace("_", "")
+
+    return text
+def name_key_reversed(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    parts = text.split()
+
+    if len(parts) < 2:
+        return name_key(text)
+
+    reversed_text = " ".join(reversed(parts))
+
+    return name_key(reversed_text)
+def clean_roster_name(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    if text.lower() == "nan":
+        return ""
+
+    text = text.replace("\n", " ")
+    text = text.replace("  ", " ")
+
+    return text.strip()
+def safe_sort_by_time(df, column_name):
+    if column_name not in df.columns:
+        return df
+
+    try:
+        return df.sort_values(
+            by=column_name,
+            key=lambda col: col.astype(str)
+        ).reset_index(drop=True)
+
+    except Exception:
+        return df
+def normalize_time_text(value):
+    if value is None:
+        return ""
+
+    text = str(value).strip()
+
+    if text == "" or text.lower() == "nan":
+        return ""
+
+    text = text.replace(".", ":")
+
+    if ":" in text:
+        parts = text.split(":")
+        try:
+            hour = int(parts[0])
+            minute = int(parts[1])
+            return f"{hour:02d}:{minute:02d}"
+        except Exception:
+            return text
+
+    try:
+        hour = int(float(text))
+        return f"{hour:02d}:00"
+    except Exception:
+        return text
+def clean_text(value):
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def safe_str(value):
+    if value is None:
+        return ""
+    return str(value)
+
+
+def is_time_like(value):
+    text = str(value)
+    return ":" in text
 
 
 # =========================
@@ -163,15 +286,6 @@ def build_shift_map_from_excel(uploaded_file):
                     key_rev = name_key(" ".join(reversed(possible_name.split())))
                     if key_rev not in shift_map:
                         shift_map[key_rev] = shift_map[key]
-                    # שמות עם שם אמצעי (3+ מילים): הוסף מפתחות ללא השם האמצעי
-                    # כדי לזהות עובדים שרשומים בקובץ העובדים עם שם ומשפחה בלבד
-                    _words = possible_name.split()
-                    if len(_words) >= 3:
-                        _first, _last = _words[0], _words[-1]
-                        for _combo in [f"{_first} {_last}", f"{_last} {_first}"]:
-                            _k = name_key(_combo)
-                            if _k not in shift_map:
-                                shift_map[_k] = shift_map[key]
 
                 entry = shift_map[key]
                 if sick:
@@ -266,109 +380,232 @@ def apply_shift_map_to_employees(employees_df, shift_map_with_names):
 # LOAD FILES
 # =========================
 
+
+def _normalize_flight_cell(value):
+    """Return a clean LY flight number from almost any cell text."""
+    text = clean_text(value).upper().replace("‏", "").replace("‎", "")
+    text = re.sub(r"\s+", "", text)
+    m = re.search(r"LY\d{1,4}[A-Z]?", text)
+    if not m:
+        return ""
+    flight = m.group(0)
+    # לא מייבאים טיסות 8XXX, לפי החוק שקבענו
+    if flight.replace("LY", "").startswith("8"):
+        return ""
+    return flight
+
+
+def _normalize_time_cell(value):
+    """Return HH:MM from strings / Excel times / pandas timestamps."""
+    if pd.isna(value):
+        return ""
+
+    # pandas / python datetime-like values
+    try:
+        if hasattr(value, "hour") and hasattr(value, "minute"):
+            return f"{int(value.hour):02d}:{int(value.minute):02d}"
+    except Exception:
+        pass
+
+    text = clean_text(value)
+    if not text:
+        return ""
+
+    # Excel sometimes stores time as fraction of day
+    try:
+        if re.fullmatch(r"\d+(\.\d+)?", text):
+            num = float(text)
+            if 0 <= num < 1:
+                total = round(num * 24 * 60)
+                return f"{(total // 60) % 24:02d}:{total % 60:02d}"
+    except Exception:
+        pass
+
+    m = re.search(r"(\d{1,2}):(\d{2})(?::\d{2})?", text)
+    if not m:
+        return ""
+    return f"{int(m.group(1)):02d}:{int(m.group(2)):02d}"
+
+
+def _parse_time_pair(value):
+    """Return departure and boarding if the same cell contains one or two times."""
+    text = clean_text(value)
+    times = re.findall(r"\d{1,2}:\d{2}(?::\d{2})?", text)
+    times = [_normalize_time_cell(t) for t in times]
+    times = [t for t in times if t]
+    if len(times) >= 2:
+        return times[0], times[1]
+    if len(times) == 1:
+        return times[0], ""
+    return _normalize_time_cell(value), ""
+
+
+def _first_existing_column(df, names):
+    """Find a column by exact name or case-insensitive name."""
+    by_clean = {clean_text(c): c for c in df.columns}
+    by_lower = {clean_text(c).lower(): c for c in df.columns}
+    for name in names:
+        if name in by_clean:
+            return by_clean[name]
+        if name.lower() in by_lower:
+            return by_lower[name.lower()]
+    return None
+
+
+def _value_from_nearby_row(row_values, start_index, preferred_offsets):
+    """Pick the first non-empty value around a detected flight cell."""
+    for off in preferred_offsets:
+        i = start_index + off
+        if 0 <= i < len(row_values):
+            val = clean_text(row_values[i])
+            if val:
+                return val
+    return ""
+
+
 def load_daily_schedule(uploaded_file):
+    """
+    Load the daily flight roster from the work schedule file.
+
+    Works with:
+    1. The official Hebrew sheet: דוח שיבוץ טיסות - המראות
+    2. A clean table with headers like טיסה / יעד / המראה / בורדינג
+    3. A messy Excel export where the useful columns are Unnamed: 8/7/6
+    4. A raw grid where the flight number appears somewhere in the row
+    """
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+
     excel = pd.ExcelFile(uploaded_file)
-    sheet_name = "דוח שיבוץ טיסות - המראות" if "דוח שיבוץ טיסות - המראות" in excel.sheet_names else excel.sheet_names[0]
-    raw = pd.read_excel(uploaded_file, sheet_name=sheet_name)
+    preferred_sheet = "דוח שיבוץ טיסות - המראות"
+    sheet_name = preferred_sheet if preferred_sheet in excel.sheet_names else excel.sheet_names[0]
+
+    try:
+        uploaded_file.seek(0)
+    except Exception:
+        pass
+    raw = pd.read_excel(uploaded_file, sheet_name=sheet_name, dtype=object)
     raw.columns = raw.columns.astype(str).str.strip()
 
     flights = []
 
+    def add_flight(flight_text, destination="", departure="", boarding="", gate="", aircraft="", reg="", pax="", trainee="לא", training=""):
+        flight_text = _normalize_flight_cell(flight_text)
+        if not flight_text:
+            return
+
+        dep, parsed_boarding = _parse_time_pair(departure)
+        boarding_norm = _normalize_time_cell(boarding) or parsed_boarding
+
+        # If the boarding column accidentally contains two times, use the first one there
+        if not boarding_norm:
+            _, b2 = _parse_time_pair(boarding)
+            boarding_norm = b2
+
+        if not dep:
+            return
+
+        flights.append({
+            "טיסה": flight_text,
+            "יעד": clean_text(destination).upper(),
+            "המראה": dep,
+            "בורדינג": boarding_norm,
+            "גייט": clean_text(gate),
+            "סוג מטוס": clean_text(aircraft),
+            "רישוי": clean_text(reg),
+            "נוסעים": clean_text(pax),
+            "טרייני רצ": normalize_yes_no(trainee),
+            "סוג הכשרה": clean_text(training),
+        })
+
+    # Case 1: the known export layout, where flight/time/destination sit in Unnamed columns
     if {"Unnamed: 8", "Unnamed: 7", "Unnamed: 6"}.issubset(set(raw.columns)):
         for _, row in raw.iterrows():
-            flight = row.get("Unnamed: 8")
-            time_text = row.get("Unnamed: 7")
-            destination = row.get("Unnamed: 6")
-            aircraft = row.get("Unnamed: 5")
+            add_flight(
+                row.get("Unnamed: 8"),
+                destination=row.get("Unnamed: 6"),
+                departure=row.get("Unnamed: 7"),
+                aircraft=row.get("Unnamed: 5"),
+            )
 
-            flight_text = clean_text(flight)
-            if not flight_text.startswith("LY"):
-                continue
-            flight_num = flight_text.replace("LY", "").strip()
-            if flight_num.startswith("8"):
-                continue
+    # Case 2: clean headers
+    if not flights:
+        flight_col   = _first_existing_column(raw, ["טיסה", "מספר טיסה", "Flight", "FlightNo", "flight", "flightno"])
+        dest_col     = _first_existing_column(raw, ["יעד", "Destination", "destination", "Dest", "dest"])
+        dep_col      = _first_existing_column(raw, ["המראה", "זמן המראה", "Departure", "STD", "departure", "std"])
+        board_col    = _first_existing_column(raw, ["בורדינג", "תחילת בורדינג", "Boarding", "boarding"])
+        gate_col     = _first_existing_column(raw, ["גייט", "שער", "Gate", "gate"])
+        aircraft_col = _first_existing_column(raw, ["סוג מטוס", "מטוס", "Aircraft", "aircraft", "A/C", "AC"])
+        reg_col      = _first_existing_column(raw, ["רישוי", "רישום", "Registration", "registration", "Reg", "REG"])
+        pax_col      = _first_existing_column(raw, ["נוסעים", "PAX", "pax", "Passengers", "passengers"])
+        trainee_col  = _first_existing_column(raw, ["טרייני רצ", "טרייני ר״צ", 'טרייני ר"צ'])
+        training_col = _first_existing_column(raw, ["סוג הכשרה", "הכשרה"])
 
-            departure, boarding = parse_times(time_text)
+        if flight_col:
+            for _, row in raw.iterrows():
+                add_flight(
+                    row.get(flight_col),
+                    destination=row.get(dest_col) if dest_col else "",
+                    departure=row.get(dep_col) if dep_col else "",
+                    boarding=row.get(board_col) if board_col else "",
+                    gate=row.get(gate_col) if gate_col else "",
+                    aircraft=row.get(aircraft_col) if aircraft_col else "",
+                    reg=row.get(reg_col) if reg_col else "",
+                    pax=row.get(pax_col) if pax_col else "",
+                    trainee=row.get(trainee_col) if trainee_col else "לא",
+                    training=row.get(training_col) if training_col else "",
+                )
 
-            flights.append({
-                "טיסה": flight_text,
-                "יעד": clean_text(destination).upper(),
-                "המראה": departure,
-                "בורדינג": boarding,
-                "גייט": "",
-                "סוג מטוס": clean_text(aircraft),
-                "רישוי": "",
-                "נוסעים": "",
-                "טרייני רצ": "לא",
-                "סוג הכשרה": "",
-            })
-    else:
-        flight_col   = find_column(raw, ["טיסה", "מספר טיסה", "Flight", "flight"])
-        dest_col     = find_column(raw, ["יעד", "Destination", "destination"])
-        dep_col      = find_column(raw, ["המראה", "זמן המראה", "Departure", "departure"])
-        board_col    = find_column(raw, ["בורדינג", "תחילת בורדינג", "Boarding", "boarding"])
-        gate_col     = find_column(raw, ["גייט", "שער", "Gate", "gate"])
-        aircraft_col = find_column(raw, ["סוג מטוס", "מטוס", "Aircraft", "aircraft"])
-        reg_col      = find_column(raw, ["רישוי", "רישום", "Registration", "registration"])
-        pax_col      = find_column(raw, ["נוסעים", "PAX", "pax"])
-        trainee_col  = find_column(raw, ["טרייני רצ", "טרייני ר״צ", 'טרייני ר"צ'])
-        training_col = find_column(raw, ["סוג הכשרה", "הכשרה"])
+    # Case 3: raw grid fallback across all sheets
+    if not flights:
+        try:
+            uploaded_file.seek(0)
+        except Exception:
+            pass
+        all_sheets = pd.read_excel(uploaded_file, sheet_name=None, header=None, dtype=object)
+        for _, grid in all_sheets.items():
+            for _, row in grid.iterrows():
+                vals = list(row.values)
+                for idx, val in enumerate(vals):
+                    flight = _normalize_flight_cell(val)
+                    if not flight:
+                        continue
 
-        if not flight_col:
-            raise ValueError("לא נמצאה עמודת טיסה בקובץ הסידור")
+                    # Try to find time and destination near the flight cell.
+                    # Hebrew exports are often RTL, so destination/time may be to the left.
+                    near_vals = vals[max(0, idx - 10): min(len(vals), idx + 11)]
+                    times = [_normalize_time_cell(v) for v in near_vals]
+                    times = [t for t in times if t]
+                    departure = times[0] if times else ""
+                    boarding = times[1] if len(times) > 1 else ""
 
-        for _, row in raw.iterrows():
-            flight_text = clean_text(row.get(flight_col))
-            if not flight_text.startswith("LY"):
-                continue
-            if flight_text.replace("LY", "").strip().startswith("8"):
-                continue
-
-            dep = clean_text(row.get(dep_col)) if dep_col else ""
-            boarding = clean_text(row.get(board_col)) if board_col else ""
-
-            if not is_time_text(dep):
-                dep, parsed_boarding = parse_times(dep)
-                if not boarding:
-                    boarding = parsed_boarding
-
-            flights.append({
-                "טיסה": flight_text,
-                "יעד": clean_text(row.get(dest_col)).upper() if dest_col else "",
-                "המראה": dep,
-                "בורדינג": boarding,
-                "גייט": clean_text(row.get(gate_col)) if gate_col else "",
-                "סוג מטוס": clean_text(row.get(aircraft_col)) if aircraft_col else "",
-                "רישוי": clean_text(row.get(reg_col)) if reg_col else "",
-                "נוסעים": clean_text(row.get(pax_col)) if pax_col else "",
-                "טרייני רצ": normalize_yes_no(row.get(trainee_col)) if trainee_col else "לא",
-                "סוג הכשרה": clean_text(row.get(training_col)) if training_col else "",
-            })
+                    destination = _value_from_nearby_row(vals, idx, [-2, -1, 1, 2, -3, 3])
+                    aircraft = _value_from_nearby_row(vals, idx, [-4, 4, -5, 5])
+                    add_flight(flight, destination=destination, departure=departure, boarding=boarding, aircraft=aircraft)
 
     flights_df = pd.DataFrame(flights)
 
+    wanted_cols = ["טיסה", "יעד", "המראה", "בורדינג", "גייט", "סוג מטוס", "רישוי", "נוסעים", "טרייני רצ", "סוג הכשרה"]
     if flights_df.empty:
-        return pd.DataFrame(columns=[
-            "טיסה", "יעד", "המראה", "בורדינג", "גייט", "סוג מטוס", "רישוי", "נוסעים", "טרייני רצ", "סוג הכשרה"
-        ])
+        return pd.DataFrame(columns=wanted_cols)
 
     flights_df["_flight_key"] = flights_df["טיסה"].apply(flight_key)
     flights_df = flights_df.drop_duplicates(subset=["_flight_key"], keep="first").drop(columns=["_flight_key"])
     flights_df = flights_df[flights_df["המראה"].astype(str).str.strip() != ""].copy()
     flights_df = safe_sort_by_time(flights_df, "המראה")
 
-    return flights_df
+    for col in wanted_cols:
+        if col not in flights_df.columns:
+            flights_df[col] = ""
+
+    return flights_df[wanted_cols]
 
 
 def normalize_employees(df):
     df = df.copy()
-    df.columns = (
-    df.columns.astype(str)
-    .str.replace("\ufeff", "", regex=False)
-    .str.replace("\u200f", "", regex=False)
-    .str.replace("\u200e", "", regex=False)
-    .str.strip()
-)
+    df.columns = df.columns.astype(str).str.strip()
 
     if "שם" not in df.columns:
         raise ValueError("בקובץ העובדים חייבת להיות עמודה בשם: שם")
@@ -434,20 +671,5 @@ def normalize_employees(df):
             return ""
         return s
     df["זמינות"] = df["זמינות"].apply(clean_avail)
-
-    # נרמל כפילויות —
-    # _dedup_key: מילות השם ממוינות, כך ש"שני פדידה" ו"פדידה שני" מקבלות אותו מפתח.
-    # לשמות עם שם אמצעי (3+ מילים): נשתמש רק בשם הראשון והאחרון לצורך הדה-דופ,
-    # כך ש"טליה חנה טטרואשוילי" ו"טטרואשוילי טליה" מזוהות כאותו עובד.
-    def _dedup_key(full_name: str) -> str:
-        parts = [name_key(w) for w in full_name.split() if len(w) > 1]
-        if len(parts) >= 3:
-            parts = [parts[0], parts[-1]]
-        return "".join(sorted(parts))
-
-    df["_name_key"] = df["שם"].apply(name_key)
-    df["_dedup_key"] = df["שם"].apply(_dedup_key)
-    df = df.drop_duplicates(subset=["_dedup_key"], keep="first").reset_index(drop=True)
-    df = df.drop(columns=["_dedup_key"])
 
     return df

@@ -6,6 +6,7 @@ from datetime import datetime
 import pandas as pd
 import streamlit as st
 import streamlit.components.v1 as _components
+import uuid
 import json as _json
 from app.display import (
     build_next_task_labels,
@@ -650,6 +651,10 @@ if not daily_file or not employees_file:
 
 # Restore app chrome for the main app
 st.markdown(HERO_HTML, unsafe_allow_html=True)
+
+if "schedule_success_msg" in st.session_state:
+    st.success(st.session_state["schedule_success_msg"])
+ 
 st.markdown(LEGEND_HTML, unsafe_allow_html=True)
 st.markdown(TOP_STRIP_HTML, unsafe_allow_html=True)
 
@@ -2041,10 +2046,25 @@ if _goto_gantt_early and "schedule_df" in st.session_state:
 
 
 def recompute_from_schedule(schedule_df, flights_df, employees_df):
+
+    import time
+
+    t = time.time()
     labeled_df = build_next_task_labels(schedule_df, employees_df)
+    print("build_next_task_labels:", round(time.time()-t,1))
+
+    t = time.time()
     workload_df = build_workload(labeled_df, employees_df)
+    print("build_workload:", round(time.time()-t,1))
+
+    t = time.time()
     continuity_df = build_counter_continuity_rows(labeled_df, employees_df)
+    print("build_counter_continuity_rows:", round(time.time()-t,1))
+
+    t = time.time()
     output_df = build_output_table(flights_df, labeled_df, employees_df)
+    print("build_output_table:", round(time.time()-t,1))
+
     return labeled_df, workload_df, continuity_df, output_df
 
 
@@ -2171,13 +2191,22 @@ def render_worker_gantt(schedule_df):
 col_btn_auto, col_btn_manual = st.columns(2)
 
 with col_btn_auto:
-    if st.button("🚀 בנה שיבוץ", use_container_width=True):
+    if st.button("🚀בנה שיבוץ לכל היום", use_container_width=True):
 
         try:
+            import time
+            start_time = time.time()
+
+            t0 = time.time()
             schedule_df = build_schedule(flights_editor_df, employees_df)
+            print("build_schedule:", round(time.time() - t0, 1))
 
+            t1 = time.time()
             schedule_df = upgrade_teamleads(schedule_df, employees_df)
+            print("upgrade_teamleads:", round(time.time() - t1, 1))
 
+            elapsed = round(time.time() - start_time, 1)
+            st.session_state["build_seconds"] = elapsed
             st.session_state["schedule_df"] = schedule_df.copy()
             schedule_df.to_excel("gantt_data.xlsx", index=False)
             st.session_state["flights_snap"] = flights_editor_df.copy()
@@ -2185,17 +2214,11 @@ with col_btn_auto:
             st.session_state["show_time_form"] = False
             st.session_state["show_results"] = True
 
-            st.success(f"השיבוץ נבנה ונשמר ✅ נוצרו {len(schedule_df)} שורות")
             st.rerun()
 
         except Exception as exc:
             st.error("הייתה שגיאה בבניית השיבוץ.")
             st.exception(exc)
-with col_btn_manual:
-    if st.button("🕐 צור סידור לפי זמן", use_container_width=True):
-        st.session_state["show_time_form"] = not st.session_state.get(
-            "show_time_form", False
-        )
 
 # ── טופס זמנים ────────────────────────────────────────────────────────────────
 if (
@@ -2242,14 +2265,24 @@ if (
                 if filtered_flights.empty:
                     st.warning("לא נמצאו טיסות בטווח הזמן שנבחר.")
                 else:
+                    import time
+
+                    start_time = time.time()
+
+                    status_box = st.empty()
+                    status_box.info("⏳ בונה שיבוץ אוטומטי... נא להמתין")
+
                     schedule_df = build_schedule(filtered_flights, employees_df)
+
+                    status_box.info("🔧 משדרג ראשי צוותים...")
+
                     schedule_df = upgrade_teamleads(schedule_df, employees_df)
-                    st.session_state["schedule_df"] = schedule_df.copy()
-                    st.session_state["flights_snap"] = filtered_flights.copy()
-                    st.session_state["employees_snap"] = employees_df.copy()
-                    st.session_state["show_time_form"] = False
-                    st.success(
-                        f"שיבוץ אוטומטי נבנה עבור {len(filtered_flights)} טיסות בין {time_from}–{time_to}."
+
+                    elapsed = round(time.time() - start_time, 1)
+                    st.session_state["build_seconds"] = elapsed
+                   
+                    st.session_state["schedule_success_msg"] = (
+                        f"✅ הסידור נבנה בהצלחה תוך {elapsed} שניות"
                     )
                     st.rerun()
             except Exception as exc:
@@ -2260,17 +2293,41 @@ if (
             st.session_state["show_time_form"] = False
             st.rerun()
     st.markdown("</div>", unsafe_allow_html=True)
-
-    # ── Display ───────────────────────────────────────────────────────────────────
+   # — Display
 if "schedule_df" in st.session_state:
+    if "build_seconds" in st.session_state:
+        st.markdown(
+            f"""
+            <div style="
+                background:#0f3d2e;
+                color:white;
+                padding:14px;
+                border-radius:12px;
+                text-align:center;
+                font-size:18px;
+                font-weight:600;
+                margin-bottom:15px;
+            ">
+                ⏱️ זמן הפקת הסידור: {st.session_state['build_seconds']} שניות
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
     live_schedule = st.session_state["schedule_df"]
     live_flights = st.session_state["flights_snap"]
     live_employees = st.session_state["employees_snap"]
-
+    import time
+    display_start = time.time()
     labeled_df, workload_df, continuity_df, output_df = recompute_from_schedule(
         live_schedule, live_flights, live_employees
     )
+    
+    st.session_state["labeled_df"] = labeled_df
+    st.session_state["workload_df"] = workload_df
+    st.session_state["continuity_df"] = continuity_df
+    st.session_state["output_df"] = output_df
 
+    display_elapsed = round(time.time() - display_start, 1)
     if "תפקיד" in live_employees.columns and "שם" in live_employees.columns:
         role_map = dict(
             zip(
@@ -2290,59 +2347,223 @@ if "schedule_df" in st.session_state:
         live_schedule["עובד"].astype(str).str.contains("❌", na=False)
     ]
 
+    def classify_employee_for_scheduling(row):
+            sheet = str(row.get("לשונית", "")).strip()
+            section = str(row.get("כותרת", "")).strip()
+            role = str(row.get("תפקיד", "")).strip()
+            note = str(row.get("הערה", "")).strip()
 
-def missing_severity(row):
-    role = str(row.get("תפקיד בסיס", ""))
-    worker = str(row.get("עובד", ""))
+            has_tsa_supervisor = str(row.get("מפקח TSA", "")).strip() in ["כן", "TRUE", "True", "1"]
+            has_teamlead = str(row.get("רצ", "")).strip() in ["כן", "TRUE", "True", "1"]
 
-    if "ראש צוות" in role:
-        return "🔴 קריטי"
-    if "דייל" in role:
-        return "🟠 גבוה"
-    if "TSA" in role:
-        return "🟠 גבוה"
-    if "טרייני" in role:
-        return "🟡 בינוני"
-    return "🟡 בינוני"
+            # לא נספרים בכלל
+            if "מרכז שירות כבודה" in sheet:
+                return "מרכז שירות כבודה"
+
+            if "מלווי נוסעים" in sheet:
+                return "מלווי נוסעים"
+
+            # מנהלי משמרת
+            if "מנהלי משמרת" in sheet:
+                if "תגבור" in note or "ראש צוות" in note or "שלן" in note or "של״ן" in note:
+                    return "תגבור מנהל משמרת"
+                return "מנהל משמרת"
+
+            # של״ן בידוק חולייה
+            if "של" in sheet and (
+                "בידוק חול" in section
+                or "חוליה" in section
+                or "חולייה" in section
+            ):
+                if has_tsa_supervisor:
+                    return "בידוק חולייה - מפקח TSA"
+                return "בידוק חולייה"
+
+            # מתדרכת
+            if "מתדרכת" in role:
+                if has_teamlead:
+                    return "מתדרכת גיבוי ר״צ"
+                return "מתדרכת"
+
+            # עובדים רגילים לשיבוץ
+            if "דלפקי" in sheet or "סיירת" in sheet or "של" in sheet:
+                return "פעיל לשיבוץ"
+
+            return "לא מסווג"
 
 
-if "schedule_df" in st.session_state:
-    live_schedule = st.session_state["schedule_df"]
-    live_flights = st.session_state["flights_snap"]
-    live_employees = st.session_state["employees_snap"]
+    def missing_severity(row):
+                role = str(row.get("תפקיד בסיס", ""))
+                worker = str(row.get("עובד", ""))
 
-    labeled_df, workload_df, continuity_df, output_df = recompute_from_schedule(
-        live_schedule, live_flights, live_employees
-    )
+                if "ראש צוות" in role:
+                    return "🔴 קריטי"
+                if "דייל" in role:
+                    return "🟠 גבוה"
+                if "TSA" in role:
+                    return "🟠 גבוה"
+                if "טרייני" in role:
+                    return "🟡 בינוני"
+                return "🟡 בינוני"
+
+
+    if "schedule_df" in st.session_state:
+                live_schedule = st.session_state["schedule_df"]
+                live_flights = st.session_state["flights_snap"]
+                live_employees = st.session_state["employees_snap"]
+                shift_map_ref = build_shift_map_from_excel(daily_file)
+                shift_sheet_by_name = {}
+
+                for name, info in shift_map_ref.items():
+                    clean_name = str(info.get("original", name)).strip()
+                    sheet = str(info.get("sheet", "")).strip()
+                    if clean_name:
+                        shift_sheet_by_name[name] = sheet
+
+                employees_class_df = live_employees.copy()
+                employees_class_df["sheet"] = employees_class_df["_name_key"].astype(str).str.strip().map(shift_sheet_by_name).fillna("")
+                active_sheets = [
+                    "של\"ן",
+                    "של״ן",
+                    "שלן",
+                    "דלפקי ש\"ש",
+                    "דלפקי ש״ש",
+                ]
+                excluded_sheets = [
+                    "מנהלי משמרת",
+                    "מרכז שירות כבודה",
+                    "מלווי נוסעים",
+                ]
+
+   
+    active_schedulable_count = employees_class_df[
+        employees_class_df["sheet"].isin(active_sheets)
+        ]["_name_key"].nunique()
+    excluded_count = employees_class_df[
+    employees_class_df["sheet"].isin(excluded_sheets)
+        ]["_name_key"].nunique()
+
+    hulya_count = 0
+    tsa_hulya_count = 0
+    trainer_backup_count = 0
+
+    import time
+    display_start = time.time()
+    labeled_df = st.session_state["labeled_df"]
+    workload_df = st.session_state["workload_df"]
+    continuity_df = st.session_state["continuity_df"]
+    output_df = st.session_state["output_df"]
+
+    display_elapsed = round(time.time() - display_start, 1)
 
     missing = continuity_df.copy()
     missing["חומרה"] = missing.apply(missing_severity, axis=1)
 
     display_df = output_df.copy()
 
-    (
-        tab_schedule,
-        tab_gantt,
-        tab_missing,
-        tab_available,
-        tab_unassigned,
-        tab_breaks,
-        tab_workload,
-        tab_continuity,
-        tab_raw,
-    ) = st.tabs(
-        [
-            "✈️ לוח מבצעים",
-            "📊 גאנט",
-            "❌ חוסרים",
-            "🟡 כוננים זמינים",
-            "🧑‍✈️ עומס עובדים",
-            "⏰ הפסקות חובה",
-            "📈 עומסים",
-            "🧾 רצף/אזור",
-            "📋 פירוט גולמי",
-        ]
+    available_df = build_available_in_hall(
+    live_schedule,
+    live_employees,
+    live_flights
+)
+
+    shift_map_ref = build_shift_map_from_excel(daily_file)
+
+    unassigned_df = build_unassigned_agents(
+    live_schedule,
+    live_employees,
+    shift_map_ref
+)
+
+    total_flights = (
+        live_flights["טיסה"].nunique()
+        if "טיסה" in live_flights.columns
+        else len(live_flights)
+)
+
+    missing_real = missing[
+            missing.astype(str).apply(
+                lambda row: row.str.contains("❌", na=False).any(),
+                axis=1
+            )
+        ].copy()
+
+    assigned_workers = (
+        live_schedule["עובד"]
+        .dropna()
+        .astype(str)
+        .str.strip()
     )
+
+    assigned_workers = assigned_workers[
+        ~assigned_workers.str.contains("❌", na=False)
+    ]
+
+    total_assigned = assigned_workers.nunique()
+    
+    total_unassigned = len(unassigned_df)
+    total_available = (
+        available_df["עובד"].nunique()
+        if not available_df.empty
+        else 0
+    )
+    total_missing = output_df.astype(str).apply(
+    lambda row: row.str.contains("❌", na=False).any(),
+    axis=1
+    ).sum()
+    (tab_schedule, tab_dashboard, tab_unassigned, tab_breaks, tab_available) = st.tabs([
+        "🛠️ סידור עבודה",
+        "🧭 מרכז בקרה",
+        "☕ לא משובצים / הפסקות",
+        "⏰ הפסקות חובה",
+        "🟡 פנויים באולם",
+    ])
+    from datetime import datetime
+
+    def time_to_min(value):
+        try:
+            t = pd.to_datetime(str(value), errors="coerce")
+            if pd.isna(t):
+                return None
+            return t.hour * 60 + t.minute
+        except Exception:
+            return None
+
+
+    now = datetime.now()
+    now_min = now.hour * 60 + now.minute
+
+    active_tasks_now = live_schedule.copy()
+
+    active_tasks_now["start_min"] = active_tasks_now["התחלה"].apply(time_to_min)
+    active_tasks_now["end_min"] = active_tasks_now["סיום"].apply(time_to_min)
+
+    active_tasks_now = active_tasks_now[
+        active_tasks_now["start_min"].notna()
+        & active_tasks_now["end_min"].notna()
+        & (active_tasks_now["start_min"] <= now_min)
+        & (active_tasks_now["end_min"] >= now_min)
+        & (~active_tasks_now["עובד"].astype(str).str.contains("❌", na=False))
+    ]
+
+    workers_on_flights_now = active_tasks_now["עובד"].nunique()
+
+    if "break_log" not in st.session_state:
+        st.session_state["break_log"] = {}
+
+    workers_on_break_now = sum(
+        1
+        for b in st.session_state["break_log"].values()
+        if b.get("start") and not b.get("end")
+    )
+
+    workers_available_now = max(total_available - workers_on_break_now, 0)
+
+    workers_should_be_counters_now = max(
+        total_assigned - workers_on_flights_now - workers_on_break_now,
+        0
+)
+
     # ── Tab: לוח מבצעים ──────────────────────────────────────────────────
     with tab_schedule:
         st.markdown(
@@ -2368,13 +2589,38 @@ if "schedule_df" in st.session_state:
                 st.session_state["schedule_df"],
                 st.session_state["employees_snap"],
             )
+            # ── Tab: מרכז בקרה ───────────────────────────────────────────────────
+        with tab_dashboard:
+            st.subheader("🧭 מרכז בקרה")
+            with st.expander("בדיקת חוסרים"):
+                st.dataframe(continuity_df.head(30))
 
-    # ── Tab: גאנט ────────────────────────────────────────────────────────
-    with tab_gantt:
-        st.markdown(
-            '<a href="http://localhost:8502" target="_blank">📊 פתח גאנט</a>',
-            unsafe_allow_html=True,
-        )
+            c1, c2, c3 = st.columns(3)
+            c4, c5, c6 = st.columns(3)
+
+            c1.metric("✈️ טיסות", total_flights)
+            c2.metric("❌ חוסרים", total_missing)
+            c3.metric("👷 עובדים שובצו", total_assigned)
+
+            c4.metric("🏠 לא שובצו", total_unassigned)
+            c5.metric("🟡 פנויים באולם", total_available)
+            c6.metric("☕ בהפסקה", 0)
+            c7, c8, c9 = st.columns(3)
+
+            c7.metric("🛫 בטיסות עכשיו", workers_on_flights_now)
+            c8.metric("☕ בהפסקה עכשיו", workers_on_break_now)
+            c9.metric("🏢 אמורים להיות בדלפקים", workers_should_be_counters_now)
+        
+            st.markdown("---")
+            st.subheader("👥 סיווג עובדים לשיבוץ")
+
+            e1, e2, e3, e4, e5 = st.columns(5)
+
+            e1.metric("פעילים לשיבוץ", active_schedulable_count)
+            e2.metric("בידוק חולייה", hulya_count)
+            e3.metric("מפקחי TSA מחולייה", tsa_hulya_count)
+            e4.metric("מתדרכות גיבוי ר״צ", trainer_backup_count)
+            e5.metric("לא נספרים", excluded_count)        
         # ── Tab: פנויים באולם ─────────────────────────────────────────────────
     with tab_available:
         st.subheader("🟡 עובדים פנויים באולם היציאה")
@@ -2421,49 +2667,72 @@ if "schedule_df" in st.session_state:
             st.session_state["break_log"] = {}
 
         shift_map_ref = build_shift_map_from_excel(daily_file)
-        unassigned_df = build_unassigned_agents(
-            live_schedule, live_employees, shift_map_ref
-        )
+        shift_sheet_by_name = {}
 
-        if unassigned_df.empty:
-            st.success("כל העובדים שובצו לטיסות 🎉")
-        else:
-            st.metric("סה״כ לא משובצים", len(unassigned_df))
-            st.markdown("---")
-            for shift_label, group in unassigned_df.groupby("משמרת"):
-                start_h = shift_label.split("-")[0] if "-" in shift_label else "00:00"
-                try:
-                    sh = int(start_h.split(":")[0])
-                    if 5 <= sh < 12:
-                        emoji, label = "🌅", f"משמרת בוקר — {shift_label}"
-                    elif 12 <= sh < 18:
-                        emoji, label = "☀️", f"משמרת צהריים — {shift_label}"
-                    elif 18 <= sh < 22:
-                        emoji, label = "🌆", f"משמרת ערב — {shift_label}"
-                    else:
-                        emoji, label = "🌙", f"משמרת לילה — {shift_label}"
-                except Exception:
-                    emoji, label = "🕐", f"משמרת — {shift_label}"
+        for name, info in shift_map_ref.items():
+            sheet = str(info.get("sheet", "")).strip()
 
-                st.markdown(
-                    f'<div style="direction:rtl;background:#eef5ff;border-right:4px solid #3b82f6;'
-                    f"border-radius:10px;padding:8px 14px;margin:10px 0 6px 0;"
-                    f'font-size:14px;font-weight:900;color:#071b3a;">'
-                    f"{emoji} {safe_html(label)} ({len(group)} עובדים)</div>",
-                    unsafe_allow_html=True,
+            if sheet == "מנהלי משמרת":
+                shift_sheet_by_name[name] = "excluded"
+
+            elif sheet == "מלווי נוסעים":
+                shift_sheet_by_name[name] = "excluded"
+
+            elif sheet == "מרכז שירות כבודה":
+                shift_sheet_by_name[name] = "excluded"
+
+            elif sheet == "של\"ן":
+                shift_sheet_by_name[name] = "shalan"
+
+            else:
+                shift_sheet_by_name[name] = "active"    
+                unassigned_df = build_unassigned_agents(
+                    live_schedule, live_employees, shift_map_ref
                 )
-                for _, r in group.iterrows():
-                    name = r["שם"]
-                    role = r["תפקיד"]
-                    btn_key = re.sub(r"[^a-zA-Zא-ת0-9]", "_", name)
-                    role_color = "#8e24aa" if role == "ראש צוות" else "#5b9bd5"
-                    break_info = st.session_state["break_log"].get(name, {})
-                    on_break = bool(break_info.get("ts")) and not break_info.get(
-                        "end_ts"
+
+            break_key_counts = {}
+            if unassigned_df.empty:
+                st.success("כל העובדים שובצו לטיסות 🎉")
+            else:
+                st.markdown("---")
+                for group_counter, (shift_label, group) in enumerate(unassigned_df.groupby("משמרת"), start=1):
+                    start_h = shift_label.split("-")[0] if "-" in shift_label else "00:00"
+                    try:
+                        sh = int(start_h.split(":")[0])
+                        if 5 <= sh < 12:
+                            emoji, label = "🌅", f"משמרת בוקר — {shift_label}"
+                        elif 12 <= sh < 18:
+                            emoji, label = "☀️", f"משמרת צהריים — {shift_label}"
+                        elif 18 <= sh < 22:
+                            emoji, label = "🌆", f"משמרת ערב — {shift_label}"
+                        else:
+                            emoji, label = "🌙", f"משמרת לילה — {shift_label}"
+                    except Exception:
+                        emoji, label = "🕐", f"משמרת — {shift_label}"
+
+                    st.markdown(
+                        f'<div style="direction:rtl;background:#eef5ff;border-right:4px solid #3b82f6;'
+                        f"border-radius:10px;padding:8px 14px;margin:10px 0 6px 0;"
+                        f'font-size:14px;font-weight:900;color:#071b3a;">'
+                        f"{emoji} {safe_html(label)} ({len(group)} עובדים)</div>",
+                        unsafe_allow_html=True,
                     )
-                    break_done = bool(break_info.get("ts")) and bool(
+                    for row_counter, (idx, r) in enumerate(group.iterrows(), start=1):                        name = r["שם"]
+                    role = r["תפקיד"]
+                    safe_name = str(name).replace(" ", "_")
+                    safe_shift = str(shift_label).replace(":", "").replace("-", "_")
+                    btn_key = f"unassigned_{safe_shift}_{row_counter}_{idx}_{safe_name}_{id(r)}"
+                    break_key_counts[btn_key] = break_key_counts.get(btn_key, 0) + 1
+                    btn_key = f"{btn_key}_{break_key_counts[btn_key]}"
+                    role_color = "#320f3c" if role == "ראש צוות" else "#5b9bd5"
+                    break_info = st.session_state["break_log"].get(name, {})
+                    on_break = bool(break_info.get("ts")) and not bool(
                         break_info.get("end_ts")
                     )
+
+                    break_done = bool(break_info.get("ts")) and bool(
+                    break_info.get("end_ts")
+                                )
                     emp_row_m = live_employees[live_employees["שם"] == name]
                     bl = (
                         break_label_for_employee(emp_row_m.iloc[0])
@@ -2597,7 +2866,7 @@ if "schedule_df" in st.session_state:
                         if not on_break and not break_done:
                             if st.button(
                                 "▶ התחל הפסקה",
-                                key=f"brk_start_{btn_key}",
+                              key=f"brk_start_{btn_key}_{uuid.uuid4().hex}",
                                 use_container_width=True,
                             ):
                                 st.session_state["break_log"][name] = {
@@ -2606,12 +2875,12 @@ if "schedule_df" in st.session_state:
                                 }
                                 st.rerun()
                         else:
-                            st.button(
-                                "▶ התחל הפסקה",
-                                key=f"brk_start_{btn_key}",
-                                disabled=True,
-                                use_container_width=True,
-                            )
+                                st.button(
+                                    "▶️ התחל הפסקה",
+                                    key=f"brk_start_disabled_{btn_key}_{uuid.uuid4().hex}",
+                                    disabled=True,
+                                    use_container_width=True,
+                                )
                     with col_end:
                         if on_break:
                             if st.button(
@@ -2626,7 +2895,7 @@ if "schedule_df" in st.session_state:
                         else:
                             st.button(
                                 "⏹ סיים הפסקה",
-                                key=f"brk_end_{btn_key}",
+                                key=f"brk_end_disabled_{btn_key}_{uuid.uuid4().hex}",
                                 disabled=True,
                                 use_container_width=True,
                             )
@@ -2680,7 +2949,7 @@ if "schedule_df" in st.session_state:
         else:
             break_df = pd.DataFrame(break_rows).sort_values("הפסקה עד")
             st.metric("עובדים עם הפסקת חובה", len(break_df))
-            for _, r in break_df.iterrows():
+            for idx, r in unassigned_df.iterrows():
                 st.markdown(
                     f'<div style="direction:rtl;background:#fff8e1;border-right:5px solid #f59e0b;'
                     f'border-radius:10px;padding:10px 14px;margin-bottom:8px;font-size:14px;color:#1a1a1a;">'
@@ -2692,18 +2961,7 @@ if "schedule_df" in st.session_state:
                     unsafe_allow_html=True,
                 )
 
-    # ── Tabs: workload / continuity / raw ─────────────────────────────────
-    with tab_workload:
-        st.subheader("📊 עומס עובדים")
-        st.dataframe(workload_df, use_container_width=True)
-
-    with tab_continuity:
-        st.subheader("🧭 רצף אזורי")
-        st.dataframe(continuity_df, use_container_width=True)
-
-    with tab_raw:
-        st.subheader("🧾 פירוט גולמי")
-        st.dataframe(labeled_df, use_container_width=True)
+       # ── Debug tables hidden for now ───────────────────────────────────────
 
     excel_data = to_excel_bytes(output_df, workload_df, labeled_df, continuity_df)
     departures_excel_data = to_departures_report_excel_bytes(

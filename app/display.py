@@ -1,5 +1,6 @@
 import io
 import re
+from time import time
 import pandas as pd
 import streamlit as st
 
@@ -40,6 +41,9 @@ def build_next_task_labels(result_df, employees_df):
     break_state = {}   # emp -> {"stage": 0/1/2, "last_m": int}
     MIN_BETWEEN_BREAKS = 4 * 60
 
+    import time
+    lookup_time = 0
+
     for idx, row in timed_df.sort_values("_start_dt").iterrows():
         emp = str(row["עובד"]).strip()
 
@@ -50,12 +54,12 @@ def build_next_task_labels(result_df, employees_df):
 
         emp_match = employees_df[employees_df["שם"] == emp]
         if emp_match.empty:
-            next_text = next_task_plain_text(timed_df, idx, emp) or "חזרה"
-            df.loc[idx, "טקסט עובד"] = f"{emp} - {next_text}"
+            next_text = next_task_plain_text(timed_df, idx, emp) or "חוזר"
+            df.loc[idx, "טקסט עובד"] = f"{emp} → {next_text}"
             df.loc[idx, "המשך אזורי"] = next_text
             continue
 
-        emp_row     = emp_match.iloc[0]
+        emp_row = emp_match.iloc[0]
         shift_text  = employee_shift_text(employees_df, emp)
         shift_suffix = f" | {shift_text}" if shift_text else ""
         shift_type  = classify_shift(emp_row)
@@ -142,7 +146,6 @@ def build_next_task_labels(result_df, employees_df):
 
         df.loc[idx, "טקסט עובד"] = f"{emp} - {next_text}{shift_suffix}{deadline_suffix}"
         df.loc[idx, "המשך אזורי"] = next_text
-
     return df
 
 

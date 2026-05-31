@@ -1,4 +1,5 @@
-from datetime import timedelta
+from datetime import time, timedelta
+from unicodedata import name
 
 import pandas as pd
 
@@ -257,7 +258,7 @@ def is_available(assignments, emp_name, start, end, emp_row=None, role=None, fli
 # =========================
 
 def count_all_tasks_local(assignments, emp_name):
-    return sum(1 for task in assignments if task["עובד"] == emp_name)
+    return 0
 
 
 def count_team_lead_tasks_local(assignments, emp_name):
@@ -356,15 +357,18 @@ def sort_candidates(candidates, assignments, role, task_start=None, task_end=Non
     from utils.helpers import area_switch_penalty, classify_shift
 
     candidates = candidates.copy()
+    
     if candidates.empty:
         return candidates
 
-    candidates["_area_penalty"] = candidates.apply(
-        lambda row: area_switch_penalty(assignments, row, role), axis=1
-    )
-    candidates["_task_count"] = candidates["שם"].apply(
-        lambda name: count_all_tasks_local(assignments, name)
-    )
+    candidates["_area_penalty"] = 0
+    
+    task_counts = {}
+    for task in assignments:
+        name = task["עובד"]
+        task_counts[name] = task_counts.get(name, 0) + 1
+
+    candidates["_task_count"] = candidates["שם"].map(task_counts).fillna(0)
 
     if task_start and task_end:
         candidates["_nearby_tasks"] = candidates["שם"].apply(
@@ -381,7 +385,7 @@ def sort_candidates(candidates, assignments, role, task_start=None, task_end=Non
             return 0
         ss = clean_text(emp_row.get("תחילת משמרת", ""))
         if not is_time_text(ss):
-            return 9999
+           return 9999
         s = time_to_minutes(ss)
         t = task_start.hour * 60 + task_start.minute
         if t < s:
@@ -430,8 +434,11 @@ def sort_candidates(candidates, assignments, role, task_start=None, task_end=Non
         return candidates.sort_values(
             ["_dual_qual", "_shift_priority", "_area_penalty", "_nearby_tasks", "_shift_proximity", "_role_fit", "_task_count"]
         )
+    import time
 
-    return candidates.sort_values(sort_cols_base)
+    result = candidates.sort_values(sort_cols_base)
+
+    return result
 
 
 def has_required_mentor(assignments_for_flight, employees_df, training_type):
@@ -503,6 +510,7 @@ def _try_select(candidates, assignments, role, start, end, flight_gate,
 
 
 def build_schedule(flights_df, employees_df):
+    import time
     assignments = []
     flights_df = flights_df.copy()
     flights_df["_flight_key"] = flights_df["טיסה"].apply(
@@ -550,8 +558,8 @@ def build_schedule(flights_df, employees_df):
                     if not mentors.empty:
                         candidates = mentors
 
+                t_sort = time.time()
                 candidates = sort_candidates(candidates, assignments, role, start, end)
-
                 gate = clean_text(flight.get("גייט", ""))
                 selected = (
                     _try_select(candidates, assignments, role, start, end, gate) or
@@ -627,7 +635,6 @@ def build_schedule(flights_df, employees_df):
                 assignments.append(task)
                 assignments_for_flight.append(task)
                 used_on_flight.add(name_key(selected))
- 
     return pd.DataFrame(assignments)
 
 
@@ -646,10 +653,14 @@ def upgrade_teamleads(assignments_df, employees_df):
     def is_missing_worker(x):
         return "❌" in str(x)
 
+    emp_map = {
+        str(row["שם"]).strip(): row
+        for _, row in employees_df.iterrows()
+    }
+    
     def get_emp_row(name):
-        rows = employees_df[employees_df["שם"].astype(str).str.strip() == clean_name(name)]
-        return None if rows.empty else rows.iloc[0]
-
+        return emp_map.get(clean_name(name))
+    
     def task_times(task):
         return to_datetime_time(task["התחלה"]), to_datetime_time(task["סיום"])
 

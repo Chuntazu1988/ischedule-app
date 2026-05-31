@@ -178,6 +178,7 @@ def build_shift_map_from_excel(uploaded_file):
         return shift_map
 
     for sheet_name, raw in sheets.items():
+
         for col in raw.columns:
             current_start = ""
             current_end   = ""
@@ -274,13 +275,15 @@ def build_shift_map_from_excel(uploaded_file):
 
                 if key not in shift_map:
                     shift_map[key] = {
-                        "start":    current_start,
-                        "end":      current_end,
+                        "start": current_start,
+                        "end": current_end,
                         "original": possible_name,
-                        "blocked":       [],
+                        "sheet": sheet_name,
+                        "section": "",
+                        "blocked": [],
                         "blocked_roles": [],
-                        "sick":     False,
-                        "shift_end_override":   None,
+                        "sick": False,
+                        "shift_end_override": None,
                         "shift_start_override": None,
                     }
                     key_rev = name_key(" ".join(reversed(possible_name.split())))
